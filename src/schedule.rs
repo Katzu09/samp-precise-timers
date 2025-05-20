@@ -1,7 +1,7 @@
 use std::time::Duration;
 use std::time::Instant;
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)] // Added PartialEq
 pub(crate) enum Repeat {
     Every(Duration),
     DontRepeat,
