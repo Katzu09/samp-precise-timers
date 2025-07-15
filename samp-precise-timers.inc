@@ -30,3 +30,9 @@ native ResetPreciseTimer(const timer_number, const interval, const repeat);
     # DeletePreciseTimer returns 1 if the timer existed or 0 on failure.
 */
 native DeletePreciseTimer(const timer_number);
+
+/*
+    # GetCurrentPreciseTimerID returns the ID of the timer that is currently executing its callback.
+    # If it's not called within a timer callback, it should return 0.
+*/
+native GetCurrentPreciseTimerID();

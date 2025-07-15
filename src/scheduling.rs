@@ -52,6 +52,15 @@ pub(crate) fn delete_timer(timer_key: usize) -> Result<(), TriggeringError> {
     })
 }
 
+pub(crate) fn cleanup_timer(timer_key: usize) {
+    STATE.with_borrow_mut(|State { timers, queue }| {
+        if timers.contains(timer_key) {
+            timers.remove(timer_key);
+            queue.retain(|s| s.key != timer_key);
+        }
+    })
+}
+
 pub(crate) fn reschedule_timer(key: usize, new_schedule: Schedule) -> Result<(), TriggeringError> {
     STATE.with_borrow_mut(|State { queue, .. }| {
         let current_index = queue
@@ -97,7 +106,7 @@ pub(crate) fn remove_timers(predicate: impl Fn(&Timer) -> bool) {
 pub(crate) fn reschedule_next_due_and_then<T>(
     now: Instant,
     timer_manipulator: impl FnOnce(&Timer) -> T,
-) -> Option<T> {
+) -> Option<(usize, Repeat, T)> {
     STATE.with_borrow_mut(|State { timers, queue }| {
         let Some(scheduled @ &Schedule { key, .. }) = queue.last() else {
             return None;
@@ -106,7 +115,8 @@ pub(crate) fn reschedule_next_due_and_then<T>(
             return None;
         }
 
-        if let Repeat::Every(interval) = scheduled.repeat {
+        let repeat_type = scheduled.repeat;
+        if let Repeat::Every(interval) = repeat_type {
             let next_trigger = now + interval;
             let old_position = queue.len() - 1;
             let new_position = queue.partition_point(|s| s.next_trigger >= next_trigger);
@@ -116,16 +126,10 @@ pub(crate) fn reschedule_next_due_and_then<T>(
             } else {
                 debug_assert_eq!(new_position, old_position);
             }
-
-            let timer = timers.get_mut(key).expect("due timer should be in slab");
-            Some(timer_manipulator(timer))
-        } else {
-            let descheduled = queue.pop().expect("due timer should be in queue");
-            assert_eq!(descheduled.key, key);
-
-            let timer = timers.remove(key);
-            Some(timer_manipulator(&timer))
         }
+
+        let timer = timers.get(key).expect("due timer should be in slab");
+        Some((key, repeat_type, timer_manipulator(timer)))
     })
 }
 
@@ -175,7 +179,7 @@ mod test {
 
     #[test]
     fn hello() {
-        assert_eq!(reschedule_next_due_and_then(now(), noop), None);
+        assert!(reschedule_next_due_and_then(now(), noop).is_none());
         let first = insert_and_schedule_timer(empty_timer(), every_1s);
         let second = insert_and_schedule_timer(empty_timer(), every_1s);
         let third = insert_and_schedule_timer(empty_timer(), every_1s);
@@ -187,6 +191,6 @@ mod test {
         STATE.with_borrow_mut(|&mut State { ref mut queue, .. }| {
             assert_eq!(timer_keys(queue), [fourth, third, first, second]);
         });
-        assert_eq!(reschedule_next_due_and_then(now(), noop), None);
+        assert!(reschedule_next_due_and_then(now(), noop).is_none());
     }
 }

@@ -2,7 +2,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 #[derive(Copy, Clone, Debug)]
-pub(crate) enum Repeat {
+pub enum Repeat {
     Every(Duration),
     DontRepeat,
 }

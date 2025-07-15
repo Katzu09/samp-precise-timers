@@ -9,18 +9,24 @@ use samp::error::{AmxError, AmxResult};
 use samp::plugin::SampPlugin;
 use scheduling::{reschedule_next_due_and_then, reschedule_timer};
 
-use std::convert::TryFrom;
+use std::{cell::Cell, convert::TryFrom};
 use timer::Timer;
 mod amx_arguments;
 mod schedule;
 mod scheduling;
 mod timer;
-use schedule::Repeat::{DontRepeat, Every};
-use schedule::Schedule;
-use scheduling::{delete_timer, insert_and_schedule_timer, remove_timers};
+use schedule::{
+    Repeat::{self, DontRepeat, Every},
+    Schedule,
+};
+use scheduling::{cleanup_timer, delete_timer, insert_and_schedule_timer, remove_timers};
 
 /// The plugin
 struct PreciseTimers;
+
+thread_local! {
+    static CURRENT_TIMER_ID: Cell<i32> = Cell::new(0);
+}
 
 #[allow(clippy::manual_let_else)]
 #[allow(clippy::unused_self)]
@@ -104,6 +110,15 @@ impl PreciseTimers {
         }
         Ok(1)
     }
+    /// This function is called from PAWN via the C foreign function interface.
+    /// Returns the currently executing timer's ID, or 0 if not in a timer.
+    ///  ```
+    /// native GetCurrentPreciseTimerID()
+    /// ```
+    #[samp::native(name = "GetCurrentPreciseTimerID")]
+    pub fn get_current_timer_id(&self, _: &Amx) -> AmxResult<i32> {
+        Ok(CURRENT_TIMER_ID.with(|cell| cell.get()))
+    }
 }
 
 impl SampPlugin for PreciseTimers {
@@ -120,7 +135,12 @@ impl SampPlugin for PreciseTimers {
     fn process_tick(&self) {
         let now = now();
 
-        while let Some(callback) = reschedule_next_due_and_then(now, Timer::stack_callback_on_amx) {
+        while let Some((key, repeat, callback)) =
+            reschedule_next_due_and_then(now, Timer::stack_callback_on_amx)
+        {
+            let timer_id = i32::try_from(key + 1).unwrap_or(0);
+            CURRENT_TIMER_ID.with(|cell| cell.set(timer_id));
+
             match callback {
                 Ok(stacked_callback) => {
                     // SAFETY: We are not holding any references to scheduling stores.
@@ -130,6 +150,12 @@ impl SampPlugin for PreciseTimers {
                 }
                 Err(stacking_err) => error!("Failed to stack callback: {stacking_err}"),
             }
+
+            if let Repeat::DontRepeat = repeat {
+                cleanup_timer(key);
+            }
+
+            CURRENT_TIMER_ID.with(|cell| cell.set(0));
         }
     }
 }
@@ -139,6 +165,7 @@ samp::initialize_plugin!(
         PreciseTimers::delete,
         PreciseTimers::create,
         PreciseTimers::reset,
+        PreciseTimers::get_current_timer_id,
     ],
     {
         samp::plugin::enable_process_tick();
